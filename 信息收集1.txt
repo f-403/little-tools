@@ -1,0 +1,102 @@
+// info_collector.cpp
+// 简易信息收集工具：用户名、磁盘信息、自启动项、杀软进程检测
+
+#include <windows.h>
+#include <tlhelp32.h>
+#include <iostream>
+#include <string>
+#include <vector>
+#include <locale>
+
+// 获取当前用户名
+void GetUsername() {
+    wchar_t username[256];
+    DWORD size = 256;
+    if (GetUserNameW(username, &size)) {
+        std::wcout << L"[+] 当前用户名: " << username << std::endl;
+    } else {
+        std::wcout << L"[-] 获取用户名失败" << std::endl;
+    }
+}
+
+// 获取磁盘信息（可用空间）
+void GetDiskInfo() {
+    DWORD drives = GetLogicalDrives();
+    for (char i = 0; i < 26; i++) {
+        if (drives & (1 << i)) {
+            wchar_t root[] = { (wchar_t)('A' + i), L':', L'\\', 0 };
+            ULARGE_INTEGER freeBytes, totalBytes, totalFree;
+            if (GetDiskFreeSpaceExW(root, &freeBytes, &totalBytes, &totalFree)) {
+                std::wcout << L"[+] 磁盘 " << root
+                           << L" | 可用: " << (freeBytes.QuadPart >> 20) << L" MB" << std::endl;
+            }
+        }
+    }
+}
+
+// 查询注册表启动项
+void EnumAutoruns() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        
+        DWORD index = 0;
+        wchar_t name[256], data[1024];
+        DWORD nameSize, dataSize, type;
+
+        while (true) {
+            nameSize = 256;
+            dataSize = sizeof(data);
+            LONG res = RegEnumValueW(hKey, index++, name, &nameSize, NULL, &type,
+                                     (LPBYTE)data, &dataSize);
+            if (res != ERROR_SUCCESS) break;
+
+            std::wcout << L"[+] 启动项: " << name << L" -> " << data << std::endl;
+        }
+
+        RegCloseKey(hKey);
+    } else {
+        std::wcout << L"[-] 无法读取注册表 Run 项" << std::endl;
+    }
+}
+
+// 判断是否有已知杀软进程
+bool IsAVRunning() {
+    std::vector<std::wstring> avList = {
+        L"MsMpEng.exe", L"360tray.exe", L"avgui.exe", L"avp.exe", L"Mcshield.exe"
+    };
+
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap == INVALID_HANDLE_VALUE) return false;
+
+    PROCESSENTRY32W pe = { 0 };
+    pe.dwSize = sizeof(pe);
+
+    if (Process32FirstW(hSnap, &pe)) {
+        do {
+            for (const auto& av : avList) {
+                if (_wcsicmp(pe.szExeFile, av.c_str()) == 0) {
+                    std::wcout << L"[!] 检测到杀软进程: " << pe.szExeFile << std::endl;
+                    CloseHandle(hSnap);
+                    return true;
+                }
+            }
+        } while (Process32NextW(hSnap, &pe));
+    }
+
+    CloseHandle(hSnap);
+    std::wcout << L"[+] 未检测到已知杀软进程" << std::endl;
+    return false;
+}
+
+int main() {
+    SetConsoleOutputCP(CP_UTF8);
+    std::locale::global(std::locale(""));
+
+    std::wcout << L"=== 系统信息收集工具 ===\n";
+    GetUsername();
+    GetDiskInfo();
+    EnumAutoruns();
+    IsAVRunning();
+    return 0;
+}
